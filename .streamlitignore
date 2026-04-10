@@ -1,0 +1,60 @@
+.git
+.gitignore
+.mypy_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv
+.env
+
+# Development and testing
+notebooks/
+.ipynb_checkpoints
+*.ipynb
+test_*.py
+*_test.py
+
+# Project structure files
+FINAL/
+individual_profiles/
+ieee-fraud-detection/
+PROJECT/FINAL/
+PROJECT/individual_profiles/
+PROJECT/notebooks/
+
+# Documentation and build files
+*.docx
+*.pptx
+docs/
+build/
+dist/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Data files (not needed for inference)
+*.csv
+data/
+train_*.csv
+test_*.csv
+
+# Cache and temporary files
+.cache/
+.pytest_cache/
+tmp/
+temp/

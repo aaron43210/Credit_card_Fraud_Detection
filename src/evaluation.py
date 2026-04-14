@@ -37,7 +37,7 @@ def get_predictions(model, X, model_name="model", hetero_data=None):
         device = next(model.parameters()).device
 
         # Graph-based inference path when hetero_data is provided.
-        # If model is a tabular torch model (e.g., FraudNet MLP), this call
+        # If model is a tabular torch model, this call
         # raises TypeError and we fall back to dense feature inference below.
         if hetero_data is not None:
             try:
@@ -54,7 +54,7 @@ def get_predictions(model, X, model_name="model", hetero_data=None):
             except TypeError:
                 pass
 
-        # Tabular torch model path (e.g., FraudNet MLP).
+        # Tabular torch model path.
         try:
             with torch.no_grad():
                 X_arr = X.values if isinstance(X, pd.DataFrame) else np.asarray(X)

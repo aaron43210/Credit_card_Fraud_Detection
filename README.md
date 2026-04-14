@@ -41,5 +41,6 @@ streamlit run app.py
 
 ## Notes
 
-- Live batch scoring in app.py uses Decision Tree and XGBoost probabilities.
-- HGNN is retained as the official neural model artifact for project training/evaluation workflows.
+- app.py supports model selection: Decision Tree, XGBoost, or HGNN.
+- Batch output shows per-transaction prediction details for every uploaded row.
+- HGNN supports unlabeled batch inference and preserves uploaded row order in output.

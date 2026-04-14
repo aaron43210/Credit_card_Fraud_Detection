@@ -22,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import (
     DT_MODEL_PATH,
     XGB_MODEL_PATH,
-    HGNN_MODEL_PATH,
+    HGNN_ATT_TD_PATH,
     SCALER_PATH,
     FEATURE_NAMES_PATH,
     LABEL_ENCODERS_PATH,
@@ -95,14 +95,14 @@ def load_model(model_name: str):
                 pass
         return model
 
-    if model_name == "HGNN":
-        if not _exists(HGNN_MODEL_PATH):
+    if model_name == "HGNN Attention TD":
+        if not _exists(HGNN_ATT_TD_PATH):
             return None
         import torch
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         checkpoint = torch.load(
-            HGNN_MODEL_PATH,
+            HGNN_ATT_TD_PATH,
             map_location=device,
             weights_only=False,
         )
@@ -117,8 +117,8 @@ def get_available_models() -> list[str]:
         models.append("Decision Tree")
     if _exists(XGB_MODEL_PATH):
         models.append("XGBoost")
-    if _exists(HGNN_MODEL_PATH):
-        models.append("HGNN")
+    if _exists(HGNN_ATT_TD_PATH):
+        models.append("HGNN Attention TD")
     return models
 
 

@@ -32,7 +32,7 @@ TEST_IDENTITY = DATA_DIR / "test_identity.csv"
 # Model artifact paths
 DT_MODEL_PATH = MODEL_DIR / "decision_tree.pkl"
 XGB_MODEL_PATH = MODEL_DIR / "xgboost_model.pkl"
-HGNN_MODEL_PATH = MODEL_DIR / "hgnn_model.pt"  # Primary neural model
+HGNN_ATT_TD_PATH = MODEL_DIR / "hgnn_att_td.pt"  # HGNN Attention TD model
 SCALER_PATH = MODEL_DIR / "scaler.pkl"
 FEATURE_NAMES_PATH = MODEL_DIR / "feature_names.pkl"
 LABEL_ENCODERS_PATH = MODEL_DIR / "label_encoders.pkl"

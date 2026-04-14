@@ -29,10 +29,8 @@ N_FOLDS = config.N_FOLDS
 RANDOM_STATE = config.RANDOM_STATE
 DT_MODEL_PATH = config.DT_MODEL_PATH
 XGB_MODEL_PATH = config.XGB_MODEL_PATH
+HGNN_ATT_TD_PATH = config.HGNN_ATT_TD_PATH
 MODEL_DIR = config.MODEL_DIR
-
-# Backward compatibility for older config.py variants that don't define HGNN_MODEL_PATH.
-HGNN_MODEL_PATH = getattr(config, "HGNN_MODEL_PATH", os.path.join(str(MODEL_DIR), "hgnn_model.pt"))
 from src.models import build_decision_tree, build_xgboost, build_neural_network
 from src.utils import get_logger, Timer, format_number
 
@@ -317,7 +315,7 @@ def train_neighbor_sampled_hgnn(
                             "best_val_auc": best_val_auc,
                             "epoch": epoch + 1,
                         },
-                        HGNN_MODEL_PATH,
+                        HGNN_ATT_TD_PATH,
                     )
                 else:
                     patience_counter += 1
@@ -342,7 +340,7 @@ def train_neighbor_sampled_hgnn(
             )
         raise
 
-    checkpoint = torch.load(HGNN_MODEL_PATH, map_location=device, weights_only=False)
+    checkpoint = torch.load(HGNN_ATT_TD_PATH, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     model.eval()
@@ -368,7 +366,7 @@ def train_neighbor_sampled_hgnn(
     logger.info(f"  Best Val AUC:  {best_val_auc:.4f}")
     logger.info(f"  Val F1-Score:  {val_f1:.4f}")
     logger.info(f"  Val AUPRC:     {val_auprc:.4f}")
-    logger.info(f"  Model saved → {HGNN_MODEL_PATH}")
+    logger.info(f"  Model saved → {HGNN_ATT_TD_PATH}")
 
     return model, {"train_losses": train_losses, "val_aucs": val_aucs}
 
@@ -704,14 +702,14 @@ def train_neural_network(
                         "dropout_rates": NN_PARAMS["dropout_rates"],
                         "best_val_auc": best_val_auc,
                         "epoch": epoch + 1,
-                    }, HGNN_MODEL_PATH)
+                    }, HGNN_ATT_TD_PATH)
                 else:
                     patience_counter += 1
                     if patience_counter >= NN_PARAMS["patience"]:
                         logger.info(f"  ⏹ Early stopping at epoch {epoch+1} (patience={NN_PARAMS['patience']})")
                         break
 
-        checkpoint = torch.load(HGNN_MODEL_PATH, map_location=device, weights_only=False)
+        checkpoint = torch.load(HGNN_ATT_TD_PATH, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
 
         model.eval()
@@ -731,7 +729,7 @@ def train_neural_network(
         logger.info(f"  Best Val AUC:  {best_val_auc:.4f}")
         logger.info(f"  Val F1-Score:  {val_f1:.4f}")
         logger.info(f"  Val AUPRC:     {val_auprc:.4f}")
-        logger.info(f"  Model saved → {HGNN_MODEL_PATH}")
+        logger.info(f"  Model saved → {HGNN_ATT_TD_PATH}")
 
         return model, {"train_losses": train_losses, "val_aucs": val_aucs}
 

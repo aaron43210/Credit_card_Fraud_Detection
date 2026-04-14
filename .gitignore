@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+*.so
+
+# Environment
+.env
+.venv
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data and models (large files generated at runtime)
+data/*.csv
+models/*.pkl
+models/*.pt
+models/*.json
+
+# Outputs and artifacts (generated at runtime)
+outputs/*.csv
+.ipynb_checkpoints/
+
+# System
+.DS_Store
+Thumbs.db

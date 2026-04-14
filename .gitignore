@@ -1,0 +1,82 @@
+# Git and Version Control
+.git/
+.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.pyenv
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv
+virtualenv/
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Jupyter & Notebooks
+.ipynb_checkpoints/
+*.ipynb
+notebook_output/
+
+# Data (Large files, not needed for inference)
+ieee-fraud-detection/
+*.csv
+data/
+raw_data/
+
+# Model training outputs (use outputs/ folder instead)
+*.pkl
+*.pth
+*.pt
+*.h5
+saved_models/
+
+# Project specific
+individual_profiles/
+FINAL/
+PROJECT/FINAL/
+PROJECT/individual_profiles/
+
+# Documentation (optional for deployment)
+*.docx
+*.pptx
+docs/
+*.pdf
+
+# OS temporary files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Misc artifacts
+.cache/
+.mypy_cache/
+.pytest_cache/
+*.tmp

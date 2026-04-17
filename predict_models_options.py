@@ -297,16 +297,21 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading input: {in_path}")
-    df_in = pd.read_csv(in_path)
+    read_kwargs = {"nrows": args.max_rows} if args.max_rows is not None else {}
+    df_in = pd.read_csv(in_path, **read_kwargs)
+
+    if args.max_rows is not None:
+        print(f"Applied pre-expansion row cap: {len(df_in):,}")
+
     resolved = expand_model_input(df_in, data_dir=args.data_dir)
     if resolved.note:
         print(resolved.note)
         print(f"Prepared rows: {len(resolved.frame):,}, cols: {resolved.frame.shape[1]:,}")
     df_in = resolved.frame
 
-    if args.max_rows is not None:
+    if args.max_rows is not None and len(df_in) > args.max_rows:
         df_in = df_in.head(args.max_rows).copy()
-        print(f"Applied row cap: {len(df_in):,}")
+        print(f"Applied post-expansion row cap: {len(df_in):,}")
 
     X_scaled, df_pre = preprocess_for_model(df_in)
 

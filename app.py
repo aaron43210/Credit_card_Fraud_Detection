@@ -144,11 +144,27 @@ def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
     if len(non_id_cols) > 0:
         return df
 
-    test_tx = pd.read_csv(TEST_TRANSACTION)
-    test_id = pd.read_csv(TEST_IDENTITY)
-    full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
-    expanded = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
-    return expanded
+    # Try to load test data, but if files don't exist (e.g., on Streamlit Cloud),
+    # just return the input as-is with a warning
+    try:
+        if not TEST_TRANSACTION.exists() or not TEST_IDENTITY.exists():
+            st.warning(
+                "⚠️ Test data files not found. Please upload a CSV with full features "
+                "(not just TransactionID)."
+            )
+            return df
+        
+        test_tx = pd.read_csv(TEST_TRANSACTION)
+        test_id = pd.read_csv(TEST_IDENTITY)
+        full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
+        expanded = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
+        return expanded
+    except Exception as e:
+        st.warning(
+            f"⚠️ Could not load test data files ({str(e)}). "
+            "Please upload a CSV with full features (not just TransactionID)."
+        )
+        return df
 
 
 def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
@@ -414,10 +430,13 @@ with st.sidebar:
     st.markdown(
         """
         <div class="small-note">
-        Supported input: full merged feature CSV,
-        or id-only CSV (for example sample_submission with TransactionID).
-        Id-only files are auto-expanded to model features by TransactionID.
-        If <code>isFraud</code> is present, the app also shows accuracy metrics.
+        <strong>💾 Input Options:</strong><br/>
+        • <strong>Full CSV:</strong> Upload file with all 217+ features (train_transaction.csv merged with train_identity.csv)<br/>
+        • <strong>ID-only CSV:</strong> Upload just TransactionID + isFraud (app auto-expands using test data, if available locally)<br/>
+        <br/>
+        <strong>🌐 On Streamlit Cloud:</strong> Test data files not available. Upload full featured CSV.<br/>
+        <br/>
+        <strong>✅ With isFraud column:</strong> App calculates accuracy metrics.
         </div>
         """,
         unsafe_allow_html=True,
@@ -444,8 +463,17 @@ try:
     raw_df = expand_if_id_only(raw_df)
     if int(max_rows) > 0 and len(raw_df) > int(max_rows):
         raw_df = raw_df.head(int(max_rows)).copy()
+    
+    # Validate that we have enough features (expect 217+)
+    if len(raw_df.columns) < 50:
+        st.error(
+            f"❌ **Insufficient features**: Uploaded file has only {len(raw_df.columns)} columns. "
+            f"Models expect 217+ features (after preprocessing). "
+            f"\n\nUpload a full featured CSV (e.g., merged train_transaction.csv + train_identity.csv)."
+        )
+        st.stop()
 except Exception as exc:
-    st.error(f"Could not read the uploaded files: {exc}")
+    st.error(f"❌ Could not read the uploaded file: {exc}\n\nPlease check file format and try again.")
     st.stop()
 
 st.subheader("Uploaded Data Preview")

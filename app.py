@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Streamlit's file watcher can be unstable on some macOS setups.
@@ -150,6 +151,14 @@ def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
 
     non_id_cols = [c for c in df.columns if c not in {ID_COL, TARGET_COL}]
     if len(non_id_cols) > 0:
+        return df
+
+    # Check if test data files exist (they may not in cloud deployments)
+    if not Path(TEST_TRANSACTION).exists() or not Path(TEST_IDENTITY).exists():
+        st.warning(
+            "⚠️ Test data files not found. For id-only input to work, "
+            "please provide a CSV with full feature columns instead of just TransactionID."
+        )
         return df
 
     test_tx = pd.read_csv(TEST_TRANSACTION)

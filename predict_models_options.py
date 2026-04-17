@@ -121,12 +121,6 @@ def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
     if not looks_like_id_only:
         return df
 
-    # Check if test data files exist (they may not in cloud deployments)
-    if not Path(TEST_TRANSACTION).exists() or not Path(TEST_IDENTITY).exists():
-        print(f"⚠️ Test data files not found at {TEST_TRANSACTION} or {TEST_IDENTITY}")
-        print("Please provide a CSV with full feature columns instead of just TransactionID.")
-        return df
-
     print("Detected id-only input. Expanding with Kaggle test features by TransactionID...")
 
     test_tx = pd.read_csv(TEST_TRANSACTION)

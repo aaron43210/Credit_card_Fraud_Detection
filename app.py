@@ -168,9 +168,14 @@ def load_xgboost_model():
     )
 
 
-@st.cache_data(show_spinner=False)
-def read_csv_bytes(file_bytes: bytes, nrows: int | None = None) -> pd.DataFrame:
-    return pd.read_csv(pd.io.common.BytesIO(file_bytes), nrows=nrows)
+def read_uploaded_csv(uploaded_file, nrows: int | None = None) -> pd.DataFrame:
+    """Read uploaded CSV without materializing a full bytes copy in memory."""
+    uploaded_file.seek(0)
+    read_kwargs = {"nrows": nrows}
+    name = str(getattr(uploaded_file, "name", "")).lower()
+    if name.endswith(".gz"):
+        read_kwargs["compression"] = "gzip"
+    return pd.read_csv(uploaded_file, **read_kwargs)
 
 
 def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
@@ -443,6 +448,8 @@ with st.sidebar:
         Supported input: full merged feature CSV,
         or id-only CSV (for example sample_submission with TransactionID).
         Id-only files are auto-expanded to model features by TransactionID.
+        Very large files (for example 0.7GB) can upload slowly on Streamlit Cloud;
+        id-only CSV is usually much faster.
         Use row/column limits above for faster test runs on large files.
         If <code>isFraud</code> is present, the app also shows accuracy metrics.
         </div>
@@ -468,7 +475,7 @@ if not selected_models:
 
 try:
     read_nrows = int(max_rows) if int(max_rows) > 0 else None
-    raw_df = read_csv_bytes(uploaded_file.getvalue(), nrows=read_nrows)
+    raw_df = read_uploaded_csv(uploaded_file, nrows=read_nrows)
     pre_expand_row_cap_note: str | None = None
     if int(max_rows) > 0 and len(raw_df) > int(max_rows):
         raw_df = raw_df.head(int(max_rows)).copy()
@@ -527,13 +534,21 @@ if st.button("Run Fraud Check", type="primary"):
         st.subheader("Metrics vs Uploaded Labels")
         y_true = results["true_label"].to_numpy()
         metric_rows = []
-        for model_name, prob_col, pred_col in [
-            ("Decision Tree", "decision_tree_probability", "decision_tree_pred"),
-            ("XGBoost", "xgboost_probability", "xgboost_pred"),
-            ("HGNN", "hgnn_probability", "hgnn_pred"),
+        for model_name, prob_col in [
+            ("Decision Tree", "decision_tree_probability"),
+            ("XGBoost", "xgboost_probability"),
+            ("HGNN", "hgnn_probability"),
         ]:
-            if prob_col not in results.columns or pred_col not in results.columns:
+            if prob_col not in results.columns:
                 continue
+            pred_col = prob_col.replace("_probability", "_prediction")
+            if pred_col not in results.columns:
+                # Backward compatibility with any older in-memory outputs.
+                legacy_pred_col = prob_col.replace("_probability", "_pred")
+                if legacy_pred_col in results.columns:
+                    pred_col = legacy_pred_col
+                else:
+                    continue
             probs = results[prob_col].to_numpy()
             preds = results[pred_col].to_numpy()
             metric_rows.append({

@@ -169,8 +169,8 @@ def load_xgboost_model():
 
 
 @st.cache_data(show_spinner=False)
-def read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
-    return pd.read_csv(pd.io.common.BytesIO(file_bytes))
+def read_csv_bytes(file_bytes: bytes, nrows: int | None = None) -> pd.DataFrame:
+    return pd.read_csv(pd.io.common.BytesIO(file_bytes), nrows=nrows)
 
 
 def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
@@ -467,7 +467,13 @@ if not selected_models:
     st.stop()
 
 try:
-    raw_df = read_csv_bytes(uploaded_file.getvalue())
+    read_nrows = int(max_rows) if int(max_rows) > 0 else None
+    raw_df = read_csv_bytes(uploaded_file.getvalue(), nrows=read_nrows)
+    pre_expand_row_cap_note: str | None = None
+    if int(max_rows) > 0 and len(raw_df) > int(max_rows):
+        raw_df = raw_df.head(int(max_rows)).copy()
+        pre_expand_row_cap_note = f"Applied pre-expansion row cap: {len(raw_df):,}"
+
     resolved_input = expand_model_input(raw_df)
     raw_df = resolved_input.frame
     if int(max_rows) > 0 and len(raw_df) > int(max_rows):
@@ -488,6 +494,8 @@ except Exception as exc:
 st.subheader("Uploaded Data Preview")
 st.write(raw_df.head(10))
 st.caption(f"Rows: {len(raw_df):,} | Columns: {len(raw_df.columns):,}")
+if pre_expand_row_cap_note:
+    st.info(pre_expand_row_cap_note)
 if resolved_input.note:
     st.info(resolved_input.note)
 

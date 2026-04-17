@@ -29,6 +29,11 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+# Ensure local package imports (src/*) resolve consistently in cloud/runtime environments.
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 MAX_TABLE_RENDER_ROWS = 2000
 MAX_CHART_RENDER_ROWS = 5000
 
@@ -51,7 +56,24 @@ from src.config import (
     TARGET_COL,
     ID_COL,
 )
-from src.input_resolution import expand_model_input
+try:
+    from src.input_resolution import expand_model_input
+except ModuleNotFoundError:
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class _ResolvedInput:
+        frame: pd.DataFrame
+        mode: str = "passthrough"
+        split: str | None = None
+        note: str | None = (
+            "input_resolution module not available in this deployment. "
+            "Using uploaded CSV as-is; id-only auto-expansion is disabled."
+        )
+
+    def expand_model_input(df: pd.DataFrame, data_dir: str | None = None) -> _ResolvedInput:
+        _ = data_dir
+        return _ResolvedInput(frame=df)
 
 
 def app_cap_outliers(df: pd.DataFrame) -> pd.DataFrame:

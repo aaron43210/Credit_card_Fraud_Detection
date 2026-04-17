@@ -33,6 +33,7 @@ N_FOLDS          = config.N_FOLDS
 RANDOM_STATE     = config.RANDOM_STATE
 DT_MODEL_PATH    = config.DT_MODEL_PATH
 XGB_MODEL_PATH   = config.XGB_MODEL_PATH
+XGB_BOOSTER_PATH = config.XGB_BOOSTER_PATH
 HGNN_ATT_TD_PATH = config.HGNN_ATT_TD_PATH
 MODEL_DIR        = config.MODEL_DIR
 
@@ -261,6 +262,8 @@ def train_xgboost(
     os.makedirs(MODEL_DIR, exist_ok=True)
     joblib.dump(model, XGB_MODEL_PATH)
     logger.info(f"  Model saved → {XGB_MODEL_PATH}")
+    model.get_booster().save_model(XGB_BOOSTER_PATH)
+    logger.info(f"  Booster saved → {XGB_BOOSTER_PATH}")
 
     return model, training_history
 

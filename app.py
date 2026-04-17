@@ -15,10 +15,14 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Streamlit's file watcher can be unstable on some macOS setups.
 # Disable it so the app starts reliably.
+MPL_CONFIG_DIR = Path(__file__).resolve().parent / ".mplconfig"
+MPL_CONFIG_DIR.mkdir(exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MPL_CONFIG_DIR))
 os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
@@ -39,6 +43,8 @@ from src.config import (
     LABEL_ENCODERS_PATH,
     FEATURE_NAMES_PATH,
     DT_MODEL_PATH,
+    XGB_MODEL_PATH,
+    XGB_BOOSTER_PATH,
     HGNN_ATT_TD_PATH,
     MISSING_THRESHOLD,
     AMT_CAP_PERCENTILE,
@@ -127,15 +133,18 @@ def load_decision_tree_model():
 def load_xgboost_model():
     import xgboost as xgb
 
-    xgb_booster_path = SCALER_PATH.parent / "xgboost_booster.json"
-    if not xgb_booster_path.exists():
-        raise FileNotFoundError(
-            f"Missing {xgb_booster_path}. Please generate it before running the app."
-        )
-    xgb_model = xgb.Booster()
-    xgb_model.load_model(str(xgb_booster_path))
-    xgb_model.set_param({"nthread": 1})
-    return xgb_model
+    if XGB_BOOSTER_PATH.exists():
+        xgb_model = xgb.Booster()
+        xgb_model.load_model(str(XGB_BOOSTER_PATH))
+        xgb_model.set_param({"nthread": 1})
+        return ("booster", xgb_model)
+
+    if XGB_MODEL_PATH.exists():
+        return ("sklearn", joblib.load(XGB_MODEL_PATH))
+
+    raise FileNotFoundError(
+        f"Missing XGBoost artifacts. Expected one of: {XGB_BOOSTER_PATH} or {XGB_MODEL_PATH}"
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -308,9 +317,13 @@ def predict_models(raw_df: pd.DataFrame, artifacts: Dict[str, object], selected_
             result["decision_tree_probability"] = proba
             result["decision_tree_pred"] = (proba >= 0.5).astype(int)
         elif model_name == "xgboost":
-            xgb_model = load_xgboost_model()
-            xgb_dmatrix = xgb.DMatrix(np.ascontiguousarray(scaled_df.values.astype(np.float32)))
-            proba = xgb_model.predict(xgb_dmatrix)
+            model_kind, xgb_model = load_xgboost_model()
+            xgb_array = np.ascontiguousarray(scaled_df.values.astype(np.float32))
+            if model_kind == "booster":
+                xgb_dmatrix = xgb.DMatrix(xgb_array)
+                proba = xgb_model.predict(xgb_dmatrix)
+            else:
+                proba = xgb_model.predict_proba(xgb_array)[:, 1]
             result["xgboost_probability"] = proba
             result["xgboost_pred"] = (proba >= 0.5).astype(int)
         elif model_name == "hgnn":

@@ -36,6 +36,7 @@ TEST_IDENTITY     = DATA_DIR / "test_identity.csv"
 # ───────────────────── Model Artifact Paths ─────────────────────
 DT_MODEL_PATH       = MODEL_DIR / "decision_tree.pkl"
 XGB_MODEL_PATH      = MODEL_DIR / "xgboost_model.pkl"
+XGB_BOOSTER_PATH    = MODEL_DIR / "xgboost_booster.json"
 HGNN_ATT_TD_PATH    = MODEL_DIR / "hgnn_att_td.pt"
 SCALER_PATH         = MODEL_DIR / "scaler.pkl"
 FEATURE_NAMES_PATH  = MODEL_DIR / "feature_names.pkl"

@@ -39,7 +39,6 @@ from src.config import (
     LABEL_ENCODERS_PATH,
     FEATURE_NAMES_PATH,
     DT_MODEL_PATH,
-    XGB_MODEL_PATH,
     HGNN_ATT_TD_PATH,
     MISSING_THRESHOLD,
     AMT_CAP_PERCENTILE,
@@ -126,8 +125,17 @@ def load_decision_tree_model():
 
 @st.cache_resource(show_spinner=False)
 def load_xgboost_model():
-    """Load XGBoost model from pickle file."""
-    return joblib.load(XGB_MODEL_PATH)
+    import xgboost as xgb
+
+    xgb_booster_path = SCALER_PATH.parent / "xgboost_booster.json"
+    if not xgb_booster_path.exists():
+        raise FileNotFoundError(
+            f"Missing {xgb_booster_path}. Please generate it before running the app."
+        )
+    xgb_model = xgb.Booster()
+    xgb_model.load_model(str(xgb_booster_path))
+    xgb_model.set_param({"nthread": 1})
+    return xgb_model
 
 
 @st.cache_data(show_spinner=False)
@@ -144,27 +152,11 @@ def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
     if len(non_id_cols) > 0:
         return df
 
-    # Try to load test data, but if files don't exist (e.g., on Streamlit Cloud),
-    # just return the input as-is with a warning
-    try:
-        if not TEST_TRANSACTION.exists() or not TEST_IDENTITY.exists():
-            st.warning(
-                "⚠️ Test data files not found. Please upload a CSV with full features "
-                "(not just TransactionID)."
-            )
-            return df
-        
-        test_tx = pd.read_csv(TEST_TRANSACTION)
-        test_id = pd.read_csv(TEST_IDENTITY)
-        full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
-        expanded = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
-        return expanded
-    except Exception as e:
-        st.warning(
-            f"⚠️ Could not load test data files ({str(e)}). "
-            "Please upload a CSV with full features (not just TransactionID)."
-        )
-        return df
+    test_tx = pd.read_csv(TEST_TRANSACTION)
+    test_id = pd.read_csv(TEST_IDENTITY)
+    full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
+    expanded = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
+    return expanded
 
 
 def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
@@ -251,63 +243,53 @@ def build_hgnn_graph(raw_df: pd.DataFrame, scaled_df: pd.DataFrame):
 
 
 def predict_hgnn(raw_df: pd.DataFrame, X_scaled: pd.DataFrame) -> np.ndarray:
-    """Predict fraud probability using HGNN-ATT-TD model."""
     import torch
     from src.models import FraudHGNN
 
-    try:
-        checkpoint = torch.load(HGNN_ATT_TD_PATH, map_location="cpu", weights_only=False)
-        expected_dim = int(checkpoint.get("input_dim", X_scaled.shape[1]))
+    checkpoint = torch.load(HGNN_ATT_TD_PATH, map_location="cpu", weights_only=False)
+    expected_dim = int(checkpoint.get("input_dim", X_scaled.shape[1]))
 
-        # Adjust feature dimensions if needed
-        if X_scaled.shape[1] > expected_dim:
-            x_for_hgnn = X_scaled.iloc[:, :expected_dim].copy()
-        elif X_scaled.shape[1] < expected_dim:
-            pad = expected_dim - X_scaled.shape[1]
-            x_for_hgnn = X_scaled.copy()
-            for i in range(pad):
-                x_for_hgnn[f"__hgnn_pad_{i}"] = 0.0
-        else:
-            x_for_hgnn = X_scaled.copy()
+    if X_scaled.shape[1] > expected_dim:
+        x_for_hgnn = X_scaled.iloc[:, :expected_dim].copy()
+    elif X_scaled.shape[1] < expected_dim:
+        pad = expected_dim - X_scaled.shape[1]
+        x_for_hgnn = X_scaled.copy()
+        for i in range(pad):
+            x_for_hgnn[f"__hgnn_pad_{i}"] = 0.0
+    else:
+        x_for_hgnn = X_scaled
 
-        # Build heterogeneous graph
-        graph = build_hgnn_graph(raw_df, x_for_hgnn)
-        
-        # Initialize model
-        model = FraudHGNN(
-            metadata=(
-                ["transaction", "card", "device"],
-                [
-                    ("transaction", "used", "card"),
-                    ("card", "used_by", "transaction"),
-                    ("transaction", "on", "device"),
-                    ("device", "hosts", "transaction"),
-                ],
-            ),
-            input_dim=expected_dim,
-            hidden_dims=checkpoint.get("hidden_dims", [64, 64]),
-            dropout_rates=checkpoint.get("dropout_rates", [0.2, 0.2]),
+    model = FraudHGNN(
+        metadata=(
+            ["transaction", "card", "device"],
+            [
+                ("transaction", "used", "card"),
+                ("card", "used_by", "transaction"),
+                ("transaction", "on", "device"),
+                ("device", "hosts", "transaction"),
+            ],
+        ),
+        input_dim=expected_dim,
+        hidden_dims=checkpoint.get("hidden_dims"),
+        dropout_rates=checkpoint.get("dropout_rates"),
+    )
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    graph = build_hgnn_graph(raw_df, x_for_hgnn)
+    with torch.no_grad():
+        logits = model(
+            graph.x_dict,
+            graph.edge_index_dict,
+            tx_time_decay=graph["transaction"].time_decay,
         )
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
-
-        # Make predictions
-        with torch.no_grad():
-            logits = model(
-                graph.x_dict,
-                graph.edge_index_dict,
-                tx_time_decay=graph["transaction"].time_decay if "time_decay" in graph["transaction"] else None,
-            )
-            proba = torch.sigmoid(logits).squeeze().cpu().numpy()
-        
-        return proba
-    except Exception as e:
-        st.error(f"HGNN prediction failed: {str(e)}")
-        raise
+        proba = torch.sigmoid(logits).squeeze().cpu().numpy()
+    return proba
 
 
 def predict_models(raw_df: pd.DataFrame, artifacts: Dict[str, object], selected_models: List[str]) -> pd.DataFrame:
-    """Run predictions with selected models."""
+    import xgboost as xgb
+
     scaled_df, processed_df = preprocess_for_model(
         raw_df,
         artifacts["scaler"],
@@ -327,8 +309,8 @@ def predict_models(raw_df: pd.DataFrame, artifacts: Dict[str, object], selected_
             result["decision_tree_pred"] = (proba >= 0.5).astype(int)
         elif model_name == "xgboost":
             xgb_model = load_xgboost_model()
-            # Use predict_proba for sklearn wrapper
-            proba = xgb_model.predict_proba(scaled_df.values.astype(np.float32))[:, 1]
+            xgb_dmatrix = xgb.DMatrix(np.ascontiguousarray(scaled_df.values.astype(np.float32)))
+            proba = xgb_model.predict(xgb_dmatrix)
             result["xgboost_probability"] = proba
             result["xgboost_pred"] = (proba >= 0.5).astype(int)
         elif model_name == "hgnn":
@@ -430,13 +412,10 @@ with st.sidebar:
     st.markdown(
         """
         <div class="small-note">
-        <strong>💾 Input Options:</strong><br/>
-        • <strong>Full CSV:</strong> Upload file with all 217+ features (train_transaction.csv merged with train_identity.csv)<br/>
-        • <strong>ID-only CSV:</strong> Upload just TransactionID + isFraud (app auto-expands using test data, if available locally)<br/>
-        <br/>
-        <strong>🌐 On Streamlit Cloud:</strong> Test data files not available. Upload full featured CSV.<br/>
-        <br/>
-        <strong>✅ With isFraud column:</strong> App calculates accuracy metrics.
+        Supported input: full merged feature CSV,
+        or id-only CSV (for example sample_submission with TransactionID).
+        Id-only files are auto-expanded to model features by TransactionID.
+        If <code>isFraud</code> is present, the app also shows accuracy metrics.
         </div>
         """,
         unsafe_allow_html=True,
@@ -463,17 +442,8 @@ try:
     raw_df = expand_if_id_only(raw_df)
     if int(max_rows) > 0 and len(raw_df) > int(max_rows):
         raw_df = raw_df.head(int(max_rows)).copy()
-    
-    # Validate that we have enough features (expect 217+)
-    if len(raw_df.columns) < 50:
-        st.error(
-            f"❌ **Insufficient features**: Uploaded file has only {len(raw_df.columns)} columns. "
-            f"Models expect 217+ features (after preprocessing). "
-            f"\n\nUpload a full featured CSV (e.g., merged train_transaction.csv + train_identity.csv)."
-        )
-        st.stop()
 except Exception as exc:
-    st.error(f"❌ Could not read the uploaded file: {exc}\n\nPlease check file format and try again.")
+    st.error(f"Could not read the uploaded files: {exc}")
     st.stop()
 
 st.subheader("Uploaded Data Preview")

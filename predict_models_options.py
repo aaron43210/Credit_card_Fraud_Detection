@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 # Keep native runtimes conservative on macOS to reduce OpenMP/libomp crashes.
+MPL_CONFIG_DIR = Path(__file__).resolve().parent / ".mplconfig"
+MPL_CONFIG_DIR.mkdir(exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MPL_CONFIG_DIR))
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -40,7 +43,8 @@ from src.config import (
     LABEL_ENCODERS_PATH,
     FEATURE_NAMES_PATH,
     DT_MODEL_PATH,
-    TRAIN_TRANSACTION,
+    XGB_MODEL_PATH,
+    XGB_BOOSTER_PATH,
     TEST_TRANSACTION,
     TEST_IDENTITY,
     HGNN_ATT_TD_PATH,
@@ -64,6 +68,11 @@ def parse_args() -> argparse.Namespace:
         "--output",
         default="outputs/predictions_option_wise.csv",
         help="Output CSV file path.",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Optional IEEE-CIS dataset folder containing test_transaction.csv and test_identity.csv.",
     )
     parser.add_argument(
         "--max-rows",
@@ -112,7 +121,14 @@ def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
     return values.map(lambda value: known.get(value, fallback_value)).astype(np.int64)
 
 
-def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
+def resolve_test_paths(data_dir: str | None = None) -> tuple[Path, Path]:
+    if data_dir:
+        base_dir = Path(data_dir).expanduser().resolve()
+        return base_dir / "test_transaction.csv", base_dir / "test_identity.csv"
+    return TEST_TRANSACTION, TEST_IDENTITY
+
+
+def expand_if_id_only(df: pd.DataFrame, data_dir: str | None = None) -> pd.DataFrame:
     if ID_COL not in df.columns:
         return df
 
@@ -123,8 +139,9 @@ def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
 
     print("Detected id-only input. Expanding with Kaggle test features by TransactionID...")
 
-    test_tx = pd.read_csv(TEST_TRANSACTION)
-    test_id = pd.read_csv(TEST_IDENTITY)
+    test_transaction_path, test_identity_path = resolve_test_paths(data_dir)
+    test_tx = pd.read_csv(test_transaction_path)
+    test_id = pd.read_csv(test_identity_path)
     full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
 
     out = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
@@ -172,7 +189,8 @@ def build_hgnn_graph(raw_df: pd.DataFrame, scaled_df: pd.DataFrame) -> Any:
     card_source = raw_df["card1"] if "card1" in raw_df.columns else pd.Series(np.arange(n))
     card_codes, card_uniques = pd.factorize(card_source.fillna("missing").astype(str), sort=True)
     data["card"].x = torch.ones((len(card_uniques), 1), dtype=torch.float32)
-    card_edges = torch.tensor([np.arange(n), card_codes], dtype=torch.long)
+    card_idx = np.vstack([np.arange(n, dtype=np.int64), card_codes.astype(np.int64)])
+    card_edges = torch.from_numpy(card_idx)
     data[("transaction", "used", "card")].edge_index = card_edges
     data[("card", "used_by", "transaction")].edge_index = card_edges.flip(0)
 
@@ -186,7 +204,8 @@ def build_hgnn_graph(raw_df: pd.DataFrame, scaled_df: pd.DataFrame) -> Any:
 
     dev_codes, dev_uniques = pd.factorize(device_source.fillna("missing").astype(str), sort=True)
     data["device"].x = torch.ones((len(dev_uniques), 1), dtype=torch.float32)
-    dev_edges = torch.tensor([np.arange(n), dev_codes], dtype=torch.long)
+    dev_idx = np.vstack([np.arange(n, dtype=np.int64), dev_codes.astype(np.int64)])
+    dev_edges = torch.from_numpy(dev_idx)
     data[("transaction", "on", "device")].edge_index = dev_edges
     data[("device", "hosts", "transaction")].edge_index = dev_edges.flip(0)
 
@@ -209,11 +228,22 @@ def predict_decision_tree(X_scaled: pd.DataFrame) -> np.ndarray:
 
 
 def predict_xgboost(X_scaled: pd.DataFrame) -> np.ndarray:
-    booster = xgb.Booster()
-    booster.load_model(str(Path(SCALER_PATH).parent / "xgboost_booster.json"))
-    booster.set_param({"nthread": 1})
-    dmat = xgb.DMatrix(np.ascontiguousarray(X_scaled.values.astype(np.float32)))
-    return booster.predict(dmat)
+    X_array = np.ascontiguousarray(X_scaled.values.astype(np.float32))
+
+    if XGB_BOOSTER_PATH.exists():
+        booster = xgb.Booster()
+        booster.load_model(str(XGB_BOOSTER_PATH))
+        booster.set_param({"nthread": 1})
+        dmat = xgb.DMatrix(X_array)
+        return booster.predict(dmat)
+
+    if XGB_MODEL_PATH.exists():
+        model = joblib.load(XGB_MODEL_PATH)
+        return model.predict_proba(X_array)[:, 1]
+
+    raise FileNotFoundError(
+        f"Missing XGBoost artifacts. Expected one of: {XGB_BOOSTER_PATH} or {XGB_MODEL_PATH}"
+    )
 
 
 def predict_hgnn(raw_df: pd.DataFrame, X_scaled: pd.DataFrame) -> np.ndarray:
@@ -271,7 +301,7 @@ def main() -> None:
 
     print(f"Loading input: {in_path}")
     df_in = pd.read_csv(in_path)
-    df_in = expand_if_id_only(df_in)
+    df_in = expand_if_id_only(df_in, data_dir=args.data_dir)
 
     if args.max_rows is not None:
         df_in = df_in.head(args.max_rows).copy()

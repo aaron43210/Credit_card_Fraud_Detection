@@ -15,7 +15,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 from typing import Dict, List, Tuple
 
 # Streamlit's file watcher can be unstable on some macOS setups.
@@ -40,6 +39,7 @@ from src.config import (
     LABEL_ENCODERS_PATH,
     FEATURE_NAMES_PATH,
     DT_MODEL_PATH,
+    XGB_MODEL_PATH,
     HGNN_ATT_TD_PATH,
     MISSING_THRESHOLD,
     AMT_CAP_PERCENTILE,
@@ -126,17 +126,8 @@ def load_decision_tree_model():
 
 @st.cache_resource(show_spinner=False)
 def load_xgboost_model():
-    import xgboost as xgb
-
-    xgb_booster_path = SCALER_PATH.parent / "xgboost_booster.json"
-    if not xgb_booster_path.exists():
-        raise FileNotFoundError(
-            f"Missing {xgb_booster_path}. Please generate it before running the app."
-        )
-    xgb_model = xgb.Booster()
-    xgb_model.load_model(str(xgb_booster_path))
-    xgb_model.set_param({"nthread": 1})
-    return xgb_model
+    """Load XGBoost model from pickle file."""
+    return joblib.load(XGB_MODEL_PATH)
 
 
 @st.cache_data(show_spinner=False)
@@ -151,14 +142,6 @@ def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
 
     non_id_cols = [c for c in df.columns if c not in {ID_COL, TARGET_COL}]
     if len(non_id_cols) > 0:
-        return df
-
-    # Check if test data files exist (they may not in cloud deployments)
-    if not Path(TEST_TRANSACTION).exists() or not Path(TEST_IDENTITY).exists():
-        st.warning(
-            "⚠️ Test data files not found. For id-only input to work, "
-            "please provide a CSV with full feature columns instead of just TransactionID."
-        )
         return df
 
     test_tx = pd.read_csv(TEST_TRANSACTION)
@@ -252,53 +235,63 @@ def build_hgnn_graph(raw_df: pd.DataFrame, scaled_df: pd.DataFrame):
 
 
 def predict_hgnn(raw_df: pd.DataFrame, X_scaled: pd.DataFrame) -> np.ndarray:
+    """Predict fraud probability using HGNN-ATT-TD model."""
     import torch
     from src.models import FraudHGNN
 
-    checkpoint = torch.load(HGNN_ATT_TD_PATH, map_location="cpu", weights_only=False)
-    expected_dim = int(checkpoint.get("input_dim", X_scaled.shape[1]))
+    try:
+        checkpoint = torch.load(HGNN_ATT_TD_PATH, map_location="cpu", weights_only=False)
+        expected_dim = int(checkpoint.get("input_dim", X_scaled.shape[1]))
 
-    if X_scaled.shape[1] > expected_dim:
-        x_for_hgnn = X_scaled.iloc[:, :expected_dim].copy()
-    elif X_scaled.shape[1] < expected_dim:
-        pad = expected_dim - X_scaled.shape[1]
-        x_for_hgnn = X_scaled.copy()
-        for i in range(pad):
-            x_for_hgnn[f"__hgnn_pad_{i}"] = 0.0
-    else:
-        x_for_hgnn = X_scaled
+        # Adjust feature dimensions if needed
+        if X_scaled.shape[1] > expected_dim:
+            x_for_hgnn = X_scaled.iloc[:, :expected_dim].copy()
+        elif X_scaled.shape[1] < expected_dim:
+            pad = expected_dim - X_scaled.shape[1]
+            x_for_hgnn = X_scaled.copy()
+            for i in range(pad):
+                x_for_hgnn[f"__hgnn_pad_{i}"] = 0.0
+        else:
+            x_for_hgnn = X_scaled.copy()
 
-    model = FraudHGNN(
-        metadata=(
-            ["transaction", "card", "device"],
-            [
-                ("transaction", "used", "card"),
-                ("card", "used_by", "transaction"),
-                ("transaction", "on", "device"),
-                ("device", "hosts", "transaction"),
-            ],
-        ),
-        input_dim=expected_dim,
-        hidden_dims=checkpoint.get("hidden_dims"),
-        dropout_rates=checkpoint.get("dropout_rates"),
-    )
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-
-    graph = build_hgnn_graph(raw_df, x_for_hgnn)
-    with torch.no_grad():
-        logits = model(
-            graph.x_dict,
-            graph.edge_index_dict,
-            tx_time_decay=graph["transaction"].time_decay,
+        # Build heterogeneous graph
+        graph = build_hgnn_graph(raw_df, x_for_hgnn)
+        
+        # Initialize model
+        model = FraudHGNN(
+            metadata=(
+                ["transaction", "card", "device"],
+                [
+                    ("transaction", "used", "card"),
+                    ("card", "used_by", "transaction"),
+                    ("transaction", "on", "device"),
+                    ("device", "hosts", "transaction"),
+                ],
+            ),
+            input_dim=expected_dim,
+            hidden_dims=checkpoint.get("hidden_dims", [64, 64]),
+            dropout_rates=checkpoint.get("dropout_rates", [0.2, 0.2]),
         )
-        proba = torch.sigmoid(logits).squeeze().cpu().numpy()
-    return proba
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.eval()
+
+        # Make predictions
+        with torch.no_grad():
+            logits = model(
+                graph.x_dict,
+                graph.edge_index_dict,
+                tx_time_decay=graph["transaction"].time_decay if "time_decay" in graph["transaction"] else None,
+            )
+            proba = torch.sigmoid(logits).squeeze().cpu().numpy()
+        
+        return proba
+    except Exception as e:
+        st.error(f"HGNN prediction failed: {str(e)}")
+        raise
 
 
 def predict_models(raw_df: pd.DataFrame, artifacts: Dict[str, object], selected_models: List[str]) -> pd.DataFrame:
-    import xgboost as xgb
-
+    """Run predictions with selected models."""
     scaled_df, processed_df = preprocess_for_model(
         raw_df,
         artifacts["scaler"],
@@ -318,8 +311,8 @@ def predict_models(raw_df: pd.DataFrame, artifacts: Dict[str, object], selected_
             result["decision_tree_pred"] = (proba >= 0.5).astype(int)
         elif model_name == "xgboost":
             xgb_model = load_xgboost_model()
-            xgb_dmatrix = xgb.DMatrix(np.ascontiguousarray(scaled_df.values.astype(np.float32)))
-            proba = xgb_model.predict(xgb_dmatrix)
+            # Use predict_proba for sklearn wrapper
+            proba = xgb_model.predict_proba(scaled_df.values.astype(np.float32))[:, 1]
             result["xgboost_probability"] = proba
             result["xgboost_pred"] = (proba >= 0.5).astype(int)
         elif model_name == "hgnn":

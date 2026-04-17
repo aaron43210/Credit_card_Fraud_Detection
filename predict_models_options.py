@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import List, Any
 
 # Keep native runtimes conservative on macOS to reduce OpenMP/libomp crashes.
 MPL_CONFIG_DIR = Path(__file__).resolve().parent / ".mplconfig"
@@ -28,6 +29,11 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
+# Ensure local package imports (src/*) resolve consistently in cloud/runtime environments.
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import joblib
 import numpy as np
@@ -45,10 +51,26 @@ from src.config import (
     DT_MODEL_PATH,
     XGB_MODEL_PATH,
     XGB_BOOSTER_PATH,
-    TEST_TRANSACTION,
-    TEST_IDENTITY,
     HGNN_ATT_TD_PATH,
 )
+try:
+    from src.input_resolution import expand_model_input
+except ModuleNotFoundError:
+    from dataclasses import dataclass
+
+    @dataclass(frozen=True)
+    class _ResolvedInput:
+        frame: pd.DataFrame
+        mode: str = "passthrough"
+        split: str | None = None
+        note: str | None = (
+            "input_resolution module not available in this deployment. "
+            "Using input CSV as-is; id-only auto-expansion is disabled."
+        )
+
+    def expand_model_input(df: pd.DataFrame, data_dir: str | None = None) -> _ResolvedInput:
+        _ = data_dir
+        return _ResolvedInput(frame=df)
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,34 +143,6 @@ def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
     return values.map(lambda value: known.get(value, fallback_value)).astype(np.int64)
 
 
-def resolve_test_paths(data_dir: str | None = None) -> tuple[Path, Path]:
-    if data_dir:
-        base_dir = Path(data_dir).expanduser().resolve()
-        return base_dir / "test_transaction.csv", base_dir / "test_identity.csv"
-    return TEST_TRANSACTION, TEST_IDENTITY
-
-
-def expand_if_id_only(df: pd.DataFrame, data_dir: str | None = None) -> pd.DataFrame:
-    if ID_COL not in df.columns:
-        return df
-
-    non_id_cols = [c for c in df.columns if c not in {ID_COL, TARGET_COL}]
-    looks_like_id_only = len(non_id_cols) == 0
-    if not looks_like_id_only:
-        return df
-
-    print("Detected id-only input. Expanding with Kaggle test features by TransactionID...")
-
-    test_transaction_path, test_identity_path = resolve_test_paths(data_dir)
-    test_tx = pd.read_csv(test_transaction_path)
-    test_id = pd.read_csv(test_identity_path)
-    full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
-
-    out = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
-    print(f"Expanded rows: {len(out):,}, cols: {out.shape[1]:,}")
-    return out
-
-
 def preprocess_for_model(raw_df: pd.DataFrame):
     scaler = joblib.load(SCALER_PATH)
     label_encoders = joblib.load(LABEL_ENCODERS_PATH)
@@ -165,9 +159,12 @@ def preprocess_for_model(raw_df: pd.DataFrame):
         if col in df.columns:
             df[col] = safe_label_encode(df[col], encoder)
 
-    for col in feature_names:
-        if col not in df.columns:
-            df[col] = 0
+    missing_features = [col for col in feature_names if col not in df.columns]
+    if missing_features:
+        df = pd.concat(
+            [df, pd.DataFrame(0, index=df.index, columns=missing_features)],
+            axis=1,
+        )
 
     X = df.reindex(columns=feature_names).copy()
     X = X.apply(pd.to_numeric, errors="coerce").fillna(0)
@@ -301,7 +298,11 @@ def main() -> None:
 
     print(f"Loading input: {in_path}")
     df_in = pd.read_csv(in_path)
-    df_in = expand_if_id_only(df_in, data_dir=args.data_dir)
+    resolved = expand_model_input(df_in, data_dir=args.data_dir)
+    if resolved.note:
+        print(resolved.note)
+        print(f"Prepared rows: {len(resolved.frame):,}, cols: {resolved.frame.shape[1]:,}")
+    df_in = resolved.frame
 
     if args.max_rows is not None:
         df_in = df_in.head(args.max_rows).copy()

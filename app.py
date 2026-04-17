@@ -50,9 +50,8 @@ from src.config import (
     AMT_CAP_PERCENTILE,
     TARGET_COL,
     ID_COL,
-    TEST_TRANSACTION,
-    TEST_IDENTITY,
 )
+from src.input_resolution import expand_model_input
 
 
 def app_cap_outliers(df: pd.DataFrame) -> pd.DataFrame:
@@ -152,22 +151,6 @@ def read_csv_bytes(file_bytes: bytes) -> pd.DataFrame:
     return pd.read_csv(pd.io.common.BytesIO(file_bytes))
 
 
-def expand_if_id_only(df: pd.DataFrame) -> pd.DataFrame:
-    """Expand id-only input (e.g., sample_submission.csv) using Kaggle test features."""
-    if ID_COL not in df.columns:
-        return df
-
-    non_id_cols = [c for c in df.columns if c not in {ID_COL, TARGET_COL}]
-    if len(non_id_cols) > 0:
-        return df
-
-    test_tx = pd.read_csv(TEST_TRANSACTION)
-    test_id = pd.read_csv(TEST_IDENTITY)
-    full_test = pd.merge(test_tx, test_id, on=ID_COL, how="left")
-    expanded = pd.merge(df[[ID_COL]], full_test, on=ID_COL, how="left")
-    return expanded
-
-
 def safe_label_encode(series: pd.Series, encoder) -> pd.Series:
     known = {str(cls): idx for idx, cls in enumerate(encoder.classes_)}
     fallback_key = "Unknown" if "Unknown" in known else encoder.classes_[0]
@@ -197,9 +180,12 @@ def preprocess_for_model(
             df[col] = safe_label_encode(df[col], encoder)
 
     # Keep only the trained feature columns and add any missing ones as zeros.
-    for col in feature_names:
-        if col not in df.columns:
-            df[col] = 0
+    missing_features = [col for col in feature_names if col not in df.columns]
+    if missing_features:
+        df = pd.concat(
+            [df, pd.DataFrame(0, index=df.index, columns=missing_features)],
+            axis=1,
+        )
 
     numeric_df = df.reindex(columns=feature_names).copy()
     numeric_df = numeric_df.apply(pd.to_numeric, errors="coerce")
@@ -419,8 +405,15 @@ with st.sidebar:
         "Max rows to score (0 = all)",
         min_value=0,
         max_value=1_000_000,
-        value=20000,
+        value=2000,
         step=1000,
+    )
+    max_cols = st.number_input(
+        "Max columns to score (0 = all)",
+        min_value=0,
+        max_value=10000,
+        value=80,
+        step=10,
     )
     st.markdown(
         """
@@ -428,6 +421,7 @@ with st.sidebar:
         Supported input: full merged feature CSV,
         or id-only CSV (for example sample_submission with TransactionID).
         Id-only files are auto-expanded to model features by TransactionID.
+        Use row/column limits above for faster test runs on large files.
         If <code>isFraud</code> is present, the app also shows accuracy metrics.
         </div>
         """,
@@ -452,9 +446,19 @@ if not selected_models:
 
 try:
     raw_df = read_csv_bytes(uploaded_file.getvalue())
-    raw_df = expand_if_id_only(raw_df)
+    resolved_input = expand_model_input(raw_df)
+    raw_df = resolved_input.frame
     if int(max_rows) > 0 and len(raw_df) > int(max_rows):
         raw_df = raw_df.head(int(max_rows)).copy()
+    if int(max_cols) > 0 and len(raw_df.columns) > int(max_cols):
+        required_cols = [c for c in [ID_COL, TARGET_COL] if c in raw_df.columns]
+        other_cols = [c for c in raw_df.columns if c not in required_cols]
+        keep_limit = int(max_cols)
+        if keep_limit <= len(required_cols):
+            keep_cols = required_cols[:keep_limit]
+        else:
+            keep_cols = required_cols + other_cols[: keep_limit - len(required_cols)]
+        raw_df = raw_df[keep_cols].copy()
 except Exception as exc:
     st.error(f"Could not read the uploaded files: {exc}")
     st.stop()
@@ -462,6 +466,8 @@ except Exception as exc:
 st.subheader("Uploaded Data Preview")
 st.write(raw_df.head(10))
 st.caption(f"Rows: {len(raw_df):,} | Columns: {len(raw_df.columns):,}")
+if resolved_input.note:
+    st.info(resolved_input.note)
 
 if st.button("Run Fraud Check", type="primary"):
     try:

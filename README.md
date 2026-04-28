@@ -170,6 +170,9 @@ Per transaction:
 | HGNN-ATT-TD | ~0.94+ | ~0.68+ | ~0.63+ |
 
 ---
+## App deployment link 
+via streamlit: "https://creditcardfrauddetectionproject3.streamlit.app/"
+
 
 ## Configuration
 
